@@ -1,1 +1,1 @@
-# Tech-SPot-Repair-System
+# Tech-Spot-Repair-System
