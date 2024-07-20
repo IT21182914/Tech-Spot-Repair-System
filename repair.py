@@ -1,9 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import sqlite3
 from datetime import datetime, timedelta
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+import os
 
 
 class RepairApp(tk.Tk):
@@ -13,7 +14,13 @@ class RepairApp(tk.Tk):
         self.title("Tech Spot Mobile Repair System")
         self.geometry("1200x800")
 
-        self.create_db()
+        try:
+            self.create_db()
+        except sqlite3.Error as e:
+            messagebox.showerror(
+                "Database Error", f"Failed to create database: {e}")
+            self.destroy()
+            return
 
         # Display shop name
         self.shop_name_label = tk.Label(
@@ -26,20 +33,23 @@ class RepairApp(tk.Tk):
         self.create_chart_frame()
 
     def create_db(self):
-        self.conn = sqlite3.connect('repairs.db')
-        self.cursor = self.conn.cursor()
+        try:
+            self.conn = sqlite3.connect('repairs.db')
+            self.cursor = self.conn.cursor()
 
-        # Create repairs table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS repairs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                description TEXT NOT NULL,
-                cost REAL NOT NULL,
-                income REAL NOT NULL
-            )
-        ''')
-        self.conn.commit()
+            # Create repairs table
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS repairs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    cost REAL NOT NULL,
+                    income REAL NOT NULL
+                )
+            ''')
+            self.conn.commit()
+        except sqlite3.Error as e:
+            raise RuntimeError(f"Database error: {e}")
 
     def create_repair_frame(self):
         self.repair_frame = ttk.LabelFrame(self, text="Add Repair")
@@ -92,19 +102,19 @@ class RepairApp(tk.Tk):
         font = ('Helvetica', 12)
 
         self.daily_button = tk.Button(self.summary_frame, text="Daily Summary",
-                                      command=lambda: self.calculate_summary('daily'), font=font)
+                                      command=lambda: self.calculate_summary('daily'), font=font, width=20)
         self.daily_button.grid(row=0, column=0, padx=10, pady=10)
 
         self.weekly_button = tk.Button(self.summary_frame, text="Weekly Summary",
-                                       command=lambda: self.calculate_summary('weekly'), font=font)
+                                       command=lambda: self.calculate_summary('weekly'), font=font, width=20)
         self.weekly_button.grid(row=0, column=1, padx=10, pady=10)
 
         self.monthly_button = tk.Button(
-            self.summary_frame, text="Monthly Summary", command=lambda: self.calculate_summary('monthly'), font=font)
+            self.summary_frame, text="Monthly Summary", command=lambda: self.calculate_summary('monthly'), font=font, width=20)
         self.monthly_button.grid(row=0, column=2, padx=10, pady=10)
 
         self.load_repairs_button = tk.Button(
-            self.summary_frame, text="Load Repairs", command=self.load_repairs, font=font)
+            self.summary_frame, text="Load Repairs", command=self.load_repairs, font=font, width=20)
         self.load_repairs_button.grid(row=0, column=3, padx=10, pady=10)
 
     def create_chart_frame(self):
@@ -131,6 +141,23 @@ class RepairApp(tk.Tk):
 
         self.update_charts()
 
+        self.create_report_buttons()
+
+    def create_report_buttons(self):
+        font = ('Helvetica', 12)
+
+        self.daily_report_button = tk.Button(
+            self.daily_chart, text="Generate Daily Report", command=lambda: self.generate_report('daily'), font=font, bg='lightblue', width=20, height=2)
+        self.daily_report_button.pack(padx=10, pady=10)
+
+        self.weekly_report_button = tk.Button(
+            self.weekly_chart, text="Generate Weekly Report", command=lambda: self.generate_report('weekly'), font=font, bg='lightgreen', width=20, height=2)
+        self.weekly_report_button.pack(padx=10, pady=10)
+
+        self.monthly_report_button = tk.Button(
+            self.monthly_chart, text="Generate Monthly Report", command=lambda: self.generate_report('monthly'), font=font, bg='lightcoral', width=20, height=2)
+        self.monthly_report_button.pack(padx=10, pady=10)
+
     def add_repair(self):
         date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         description = self.description_entry.get()
@@ -142,9 +169,22 @@ class RepairApp(tk.Tk):
                 "Input Error", "Please enter description, cost, and income.")
             return
 
-        self.cursor.execute('INSERT INTO repairs (date, description, cost, income) VALUES (?, ?, ?, ?)',
-                            (date, description, float(cost), float(income)))
-        self.conn.commit()
+        try:
+            cost = float(cost)
+            income = float(income)
+        except ValueError:
+            messagebox.showerror(
+                "Input Error", "Cost and income must be numeric values.")
+            return
+
+        try:
+            self.cursor.execute('INSERT INTO repairs (date, description, cost, income) VALUES (?, ?, ?, ?)',
+                                (date, description, cost, income))
+            self.conn.commit()
+        except sqlite3.Error as e:
+            messagebox.showerror(
+                "Database Error", f"Failed to add repair: {e}")
+            return
 
         self.clear_entries()
         self.load_repairs()
@@ -159,9 +199,13 @@ class RepairApp(tk.Tk):
         for item in self.repair_tree.get_children():
             self.repair_tree.delete(item)
 
-        self.cursor.execute('SELECT * FROM repairs')
-        for row in self.cursor.fetchall():
-            self.repair_tree.insert('', tk.END, values=row)
+        try:
+            self.cursor.execute('SELECT * FROM repairs')
+            for row in self.cursor.fetchall():
+                self.repair_tree.insert('', tk.END, values=row)
+        except sqlite3.Error as e:
+            messagebox.showerror(
+                "Database Error", f"Failed to load repairs: {e}")
 
     def calculate_summary(self, period):
         if period == 'daily':
@@ -172,95 +216,90 @@ class RepairApp(tk.Tk):
         elif period == 'monthly':
             start_date = (datetime.now() - timedelta(days=30)
                           ).strftime('%Y-%m-%d')
+        else:
+            messagebox.showerror("Input Error", "Invalid period specified.")
+            return
 
-        self.cursor.execute(
-            'SELECT date, SUM(cost), SUM(income) FROM repairs WHERE date >= ? GROUP BY date', (start_date,))
-        data = self.cursor.fetchall()
+        try:
+            self.cursor.execute(
+                'SELECT date, SUM(cost), SUM(income) FROM repairs WHERE date >= ? GROUP BY date ORDER BY date', (start_date,))
+            data = self.cursor.fetchall()
+        except sqlite3.Error as e:
+            messagebox.showerror(
+                "Database Error", f"Failed to calculate summary: {e}")
+            return
 
-        summary_text = f"{period.capitalize()} Summary:\n"
+        if not data:
+            messagebox.showinfo(
+                f"{period.capitalize()} Summary", "No data available for the selected period.")
+            return
+
+        summary_text = f"{period.capitalize()} Summary:\n\n"
         total_cost = 0
         total_income = 0
 
         for row in data:
-            summary_text += f"Date: {row[0]
-                                     }, Cost: {row[1]}, Income: {row[2]}\n"
+            summary_text += f"Date: {row[0]}\n"
+            summary_text += f"Cost: ${row[1]:,.2f}\n"
+            summary_text += f"Income: ${row[2]:,.2f}\n"
+            net_profit = row[2] - row[1]
+            summary_text += f"Net Profit: ${net_profit:,.2f}\n"
             total_cost += row[1]
             total_income += row[2]
 
-        summary_text += f"\nTotal Cost: {total_cost}\nTotal Income: {
-            total_income}\nNet Profit: {total_income - total_cost}"
+        net_profit = total_income - total_cost
+        summary_text += f"\nTotal Cost: ${total_cost:,.2f}\n"
+        summary_text += f"Total Income: ${total_income:,.2f}\n"
+        summary_text += f"Net Profit: ${net_profit:,.2f}\n"
 
-        popup = tk.Toplevel(self)
-        popup.title(f"{period.capitalize()} Summary")
-        popup.geometry("600x400")
+        messagebox.showinfo("Summary", summary_text)
 
-        summary_label = tk.Label(popup, text=summary_text, font=(
-            'Helvetica', 12), justify='left')
-        summary_label.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+    def generate_report(self, period):
+        report_file = f'{period}_report.pdf'
+
+        try:
+            c = canvas.Canvas(report_file, pagesize=letter)
+            width, height = letter
+
+            c.setFont('Helvetica-Bold', 16)
+            c.drawString(100, height - 50, f'{period.capitalize()} Report')
+
+            c.setFont('Helvetica', 12)
+            c.drawString(100, height - 100, 'Date, Cost, Income, Net Profit')
+
+            self.cursor.execute(
+                'SELECT date, SUM(cost), SUM(income) FROM repairs WHERE date >= ? GROUP BY date ORDER BY date',
+                (self.get_start_date(period),))
+            rows = self.cursor.fetchall()
+
+            y_position = height - 130
+            for row in rows:
+                net_profit = row[2] - row[1]
+                c.drawString(100, y_position, f'{row[0]}, ${row[1]:,.2f}, ${
+                             row[2]:,.2f}, ${net_profit:,.2f}')
+                y_position -= 20
+
+            c.save()
+            messagebox.showinfo("Report Generated",
+                                f"Report saved as {report_file}")
+        except Exception as e:
+            messagebox.showerror(
+                "File Error", f"Failed to generate report: {e}")
+
+    def get_start_date(self, period):
+        if period == 'daily':
+            return datetime.now().strftime('%Y-%m-%d')
+        elif period == 'weekly':
+            return (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        elif period == 'monthly':
+            return (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        else:
+            messagebox.showerror("Input Error", "Invalid period specified.")
+            return None
 
     def update_charts(self):
-        self.plot_chart('daily', self.daily_chart, 'lightblue')
-        self.plot_chart('weekly', self.weekly_chart, 'lightgreen')
-        self.plot_chart('monthly', self.monthly_chart, 'lightcoral')
-
-    def plot_chart(self, period, frame, color):
-        if period == 'daily':
-            start_date = datetime.now().strftime('%Y-%m-%d')
-        elif period == 'weekly':
-            start_date = (datetime.now() - timedelta(days=7)
-                          ).strftime('%Y-%m-%d')
-        elif period == 'monthly':
-            start_date = (datetime.now() - timedelta(days=30)
-                          ).strftime('%Y-%m-%d')
-
-        self.cursor.execute(
-            'SELECT description, SUM(cost), SUM(income) FROM repairs WHERE date >= ? GROUP BY description', (start_date,))
-        data = self.cursor.fetchall()
-
-        descriptions = [row[0] for row in data]
-        costs = [row[1] for row in data]
-        incomes = [row[2] for row in data]
-
-        # Aggregate data to avoid too many small bars
-        if len(descriptions) > 8:
-            descriptions = descriptions[:7] + ["Other"]
-            costs = costs[:7] + [sum(costs[7:])]
-            incomes = incomes[:7] + [sum(incomes[7:])]
-
-        figure = Figure(figsize=(8, 6), dpi=100)
-        ax = figure.add_subplot(111)
-        ax.bar(descriptions, costs, color=color)
-        ax.set_title(f"{period.capitalize()} Repair Costs")
-        ax.set_xlabel("Descriptions")
-        ax.set_ylabel("Costs")
-        ax.tick_params(axis='x', rotation=45)
-
-        for widget in frame.winfo_children():
-            if isinstance(widget, FigureCanvasTkAgg):
-                widget.get_tk_widget().destroy()
-
-        canvas = FigureCanvasTkAgg(figure, frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-        figure_income = Figure(figsize=(8, 6), dpi=100)
-        ax_income = figure_income.add_subplot(111)
-        ax_income.bar(descriptions, incomes, color=color)
-        ax_income.set_title(f"{period.capitalize()} Repair Incomes")
-        ax_income.set_xlabel("Descriptions")
-        ax_income.set_ylabel("Incomes")
-        ax_income.tick_params(axis='x', rotation=45)
-
-        for widget in frame.winfo_children():
-            if isinstance(widget, FigureCanvasTkAgg):
-                widget.get_tk_widget().destroy()
-
-        canvas_income = FigureCanvasTkAgg(figure_income, frame)
-        canvas_income.draw()
-        canvas_income.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-    def day_end(self):
-        self.calculate_summary('daily')
+        # This method is kept for completeness but will not be used as charts are removed
+        pass
 
 
 if __name__ == "__main__":
